@@ -33,6 +33,495 @@
                 }
             }
         }
+
+        // ================= CƠ CHẾ XÁC THỰC, ĐĂNG NHẬP & BẢO MẬT MẬT KHẨU =================
+        function initAuthSession() {
+            let session = null;
+            try {
+                const s = localStorage.getItem('vovinam_auth_session');
+                if (s) session = JSON.parse(s);
+            } catch (e) {
+                session = null;
+            }
+
+            const loginModal = document.getElementById('login-modal');
+            renderQuickLoginList();
+
+            if (session && session.accountId) {
+                const acc = accounts.find(a => a.id === session.accountId);
+                if (acc && acc.status !== 'locked') {
+                    currentAccountId = acc.id;
+                    currentUserRole = (acc.isSuperAdmin || (acc.permissions && acc.permissions.settings_manage)) ? 'admin' : 'staff';
+                    if (loginModal) loginModal.classList.add('hidden');
+                    return;
+                }
+            }
+
+            // Nếu chưa có phiên đăng nhập hợp lệ hoặc tài khoản bị khóa -> Mở màn hình đăng nhập
+            if (loginModal) {
+                loginModal.classList.remove('hidden');
+                updateLoginBranding();
+            }
+        }
+
+        function updateLoginBranding() {
+            const logoImg = document.getElementById('login-site-logo-img');
+            const logoText = document.getElementById('login-site-logo-text');
+            const titleEl = document.getElementById('login-site-title');
+            const subTitleEl = document.getElementById('login-site-subtitle');
+
+            if (titleEl) titleEl.innerText = siteConfig.title || 'VOVINAM VIỆT VÕ ĐẠO';
+            if (subTitleEl) subTitleEl.innerText = siteConfig.subtitle || 'Hệ Thống Quản Lý Võ Sinh & Điểm Danh Chuyên Cần';
+
+            if (siteConfig.logo) {
+                if (logoImg) {
+                    logoImg.src = siteConfig.logo;
+                    logoImg.classList.remove('hidden');
+                }
+                if (logoText) logoText.classList.add('hidden');
+            } else {
+                if (logoImg) logoImg.classList.add('hidden');
+                if (logoText) {
+                    logoText.innerText = (siteConfig.title ? siteConfig.title.trim().charAt(0) : 'V').toUpperCase();
+                    logoText.classList.remove('hidden');
+                }
+            }
+        }
+
+        function renderQuickLoginList() {
+            const container = document.getElementById('quick-login-list');
+            if (!container) return;
+
+            container.innerHTML = accounts.map(acc => {
+                const isLocked = acc.status === 'locked';
+                const roleColor = acc.isSuperAdmin ? 'bg-amber-50 border-amber-200 text-amber-900' : 'bg-white border-slate-200 text-slate-800';
+                return `
+                    <button type="button" onclick="quickLogin('${acc.username}', '${acc.password || ''}')"
+                        class="p-2.5 rounded-2xl border ${roleColor} hover:border-vovinam-blue hover:shadow-sm transition text-left flex items-center justify-between group">
+                        <div class="flex items-center space-x-2">
+                            <div class="w-7 h-7 rounded-lg ${acc.isSuperAdmin ? 'bg-vovinam-blue text-vovinam-gold' : 'bg-slate-200 text-slate-700'} flex items-center justify-center font-black text-xs">
+                                ${acc.name.charAt(0).toUpperCase()}
+                            </div>
+                            <div class="min-w-0">
+                                <div class="font-bold text-xs truncate group-hover:text-vovinam-blue">${acc.name}</div>
+                                <div class="text-[10px] text-slate-500 font-mono">@${acc.username} | MK: <span class="text-amber-700 font-bold">${acc.password || '123456'}</span></div>
+                            </div>
+                        </div>
+                        <i class="fa-solid fa-arrow-right-to-bracket text-slate-300 group-hover:text-vovinam-blue text-xs transition"></i>
+                    </button>
+                `;
+            }).join('');
+        }
+
+        function quickLogin(username, password) {
+            const userInp = document.getElementById('login-username');
+            const passInp = document.getElementById('login-password');
+            if (userInp) userInp.value = username;
+            if (passInp) passInp.value = password;
+            performLogin(username, password);
+        }
+
+        function handleLogin(e) {
+            e.preventDefault();
+            const username = document.getElementById('login-username').value.trim();
+            const password = document.getElementById('login-password').value.trim();
+            performLogin(username, password);
+        }
+
+        function performLogin(username, password) {
+            const errorBox = document.getElementById('login-error-box');
+            const errorMsg = document.getElementById('login-error-msg');
+
+            const acc = accounts.find(a => a.username.toLowerCase() === username.toLowerCase());
+
+            if (!acc) {
+                if (errorBox) errorBox.classList.remove('hidden');
+                if (errorMsg) errorMsg.innerText = `Tên đăng nhập "@${username}" không tồn tại trên hệ thống!`;
+                return;
+            }
+
+            if (acc.status === 'locked') {
+                if (errorBox) errorBox.classList.remove('hidden');
+                if (errorMsg) errorMsg.innerText = `Tài khoản "${acc.name}" (@${acc.username}) đang bị tạm khóa. Vui lòng liên hệ Admin!`;
+                return;
+            }
+
+            // Kiểm tra mật khẩu
+            if (acc.password && acc.password !== password) {
+                if (errorBox) errorBox.classList.remove('hidden');
+                if (errorMsg) errorMsg.innerText = 'Mật khẩu không chính xác! Vui lòng kiểm tra lại.';
+                return;
+            }
+
+            // Đăng nhập thành công!
+            if (errorBox) errorBox.classList.add('hidden');
+
+            currentAccountId = acc.id;
+            currentUserRole = (acc.isSuperAdmin || (acc.permissions && acc.permissions.settings_manage)) ? 'admin' : 'staff';
+            acc.lastLogin = new Date().toLocaleString('vi-VN');
+
+            saveAccountsToStorage(true);
+
+            // Lưu phiên
+            try {
+                const sessionData = {
+                    accountId: acc.id,
+                    username: acc.username,
+                    loginTime: new Date().toISOString()
+                };
+                localStorage.setItem('vovinam_auth_session', JSON.stringify(sessionData));
+            } catch (err) {}
+
+            document.getElementById('login-modal').classList.add('hidden');
+            updateRoleUI();
+            renderPermissionsMatrix();
+            populateAccountSwitcher();
+            showToast(`Đăng nhập thành công! Xin chào ${acc.name} (${acc.roleTitle}).`);
+        }
+
+        function handleLogout() {
+            showConfirm('Xác Nhận Đăng Xuất', 'Bạn có chắc chắn muốn đăng xuất khỏi phiên làm việc an toàn hiện tại?', () => {
+                try {
+                    localStorage.removeItem('vovinam_auth_session');
+                } catch (e) {}
+
+                const loginModal = document.getElementById('login-modal');
+                const userInp = document.getElementById('login-username');
+                const passInp = document.getElementById('login-password');
+                const errBox = document.getElementById('login-error-box');
+
+                if (userInp) userInp.value = '';
+                if (passInp) passInp.value = '';
+                if (errBox) errBox.classList.add('hidden');
+
+                closeSwitchAccountModal();
+                closeChangePasswordModal();
+                updateLoginBranding();
+                renderQuickLoginList();
+
+                if (loginModal) loginModal.classList.remove('hidden');
+                showToast('Đã đăng xuất an toàn khỏi hệ thống!', 'info');
+            });
+        }
+
+        // ================= ĐỔI MẬT KHẨU CÁ NHÂN =================
+        function openChangePasswordModal() {
+            const acc = getCurrentAccount();
+            if (!acc) return;
+
+            const modal = document.getElementById('change-password-modal');
+            const avatar = document.getElementById('cp-user-avatar');
+            const nameEl = document.getElementById('cp-user-name');
+            const userEl = document.getElementById('cp-user-username');
+            const errBox = document.getElementById('cp-error-box');
+
+            if (avatar) avatar.innerText = acc.name.charAt(0).toUpperCase();
+            if (nameEl) nameEl.innerText = acc.name;
+            if (userEl) userEl.innerText = `Tên đăng nhập: @${acc.username}`;
+            if (errBox) errBox.classList.add('hidden');
+
+            document.getElementById('cp-current-password').value = '';
+            document.getElementById('cp-new-password').value = '';
+            document.getElementById('cp-confirm-password').value = '';
+            checkNewPasswordStrength('');
+
+            modal.classList.remove('hidden');
+        }
+
+        function closeChangePasswordModal() {
+            document.getElementById('change-password-modal').classList.add('hidden');
+        }
+
+        function checkNewPasswordStrength(pwd) {
+            const bar = document.getElementById('cp-strength-bar');
+            const text = document.getElementById('cp-strength-text');
+            if (!bar || !text) return;
+
+            if (!pwd) {
+                bar.style.width = '0%';
+                bar.className = 'h-1.5 w-0 bg-slate-300 transition-all duration-300';
+                text.innerText = 'Chưa nhập';
+                text.className = 'font-bold text-slate-400';
+                return;
+            }
+
+            let score = 0;
+            if (pwd.length >= 4) score++;
+            if (pwd.length >= 6) score++;
+            if (/[0-9]/.test(pwd) && /[a-zA-Z]/.test(pwd)) score++;
+            if (/[^a-zA-Z0-9]/.test(pwd) || pwd.length >= 10) score++;
+
+            if (score <= 1) {
+                bar.style.width = '25%';
+                bar.className = 'h-1.5 bg-red-500 transition-all duration-300';
+                text.innerText = 'Yếu';
+                text.className = 'font-bold text-red-500';
+            } else if (score === 2) {
+                bar.style.width = '50%';
+                bar.className = 'h-1.5 bg-amber-500 transition-all duration-300';
+                text.innerText = 'Trung bình';
+                text.className = 'font-bold text-amber-500';
+            } else if (score === 3) {
+                bar.style.width = '75%';
+                bar.className = 'h-1.5 bg-blue-500 transition-all duration-300';
+                text.innerText = 'Khá tốt';
+                text.className = 'font-bold text-blue-600';
+            } else {
+                bar.style.width = '100%';
+                bar.className = 'h-1.5 bg-emerald-500 transition-all duration-300';
+                text.innerText = 'Rất mạnh & An toàn';
+                text.className = 'font-bold text-emerald-600';
+            }
+        }
+
+        function handleChangePassword(e) {
+            e.preventDefault();
+            const acc = getCurrentAccount();
+            if (!acc) return;
+
+            const curPass = document.getElementById('cp-current-password').value.trim();
+            const newPass = document.getElementById('cp-new-password').value.trim();
+            const confPass = document.getElementById('cp-confirm-password').value.trim();
+            const errBox = document.getElementById('cp-error-box');
+            const errMsg = document.getElementById('cp-error-msg');
+
+            // Kiểm tra mật khẩu hiện tại
+            if (acc.password && acc.password !== curPass) {
+                if (errBox) errBox.classList.remove('hidden');
+                if (errMsg) errMsg.innerText = 'Mật khẩu hiện tại không chính xác!';
+                return;
+            }
+
+            if (newPass.length < 4) {
+                if (errBox) errBox.classList.remove('hidden');
+                if (errMsg) errMsg.innerText = 'Mật khẩu mới phải có tối thiểu 4 ký tự!';
+                return;
+            }
+
+            if (newPass !== confPass) {
+                if (errBox) errBox.classList.remove('hidden');
+                if (errMsg) errMsg.innerText = 'Xác nhận mật khẩu mới không khớp!';
+                return;
+            }
+
+            // Cập nhật mật khẩu
+            acc.password = newPass;
+            acc.passwordChangedAt = new Date().toISOString().split('T')[0];
+
+            saveAccountsToStorage();
+            closeChangePasswordModal();
+            renderPermissionsMatrix();
+            renderQuickLoginList();
+            showToast('Đổi mật khẩu thành công! Mật khẩu mới đã được kích hoạt.');
+        }
+
+        // ================= CHUYỂN ĐỔI TÀI KHOẢN (CÓ MẬT KHẨU) =================
+        function openSwitchAccountModal(targetId = null) {
+            const select = document.getElementById('switch-target-account');
+            const modal = document.getElementById('switch-account-modal');
+            const passInp = document.getElementById('switch-password');
+            const errBox = document.getElementById('switch-error-box');
+
+            if (!select || !modal) return;
+            if (errBox) errBox.classList.add('hidden');
+            if (passInp) passInp.value = '';
+
+            select.innerHTML = accounts.map(a => {
+                const isCur = a.id === currentAccountId;
+                const isLocked = a.status === 'locked';
+                return `<option value="${a.id}" ${targetId ? (a.id === targetId ? 'selected' : '') : (isCur ? 'selected' : '')}>
+                    ${a.name} (@${a.username}) - ${a.roleTitle} ${isLocked ? '[ĐÃ KHÓA]' : ''}
+                </option>`;
+            }).join('');
+
+            onSwitchAccountSelectChange(select.value);
+            modal.classList.remove('hidden');
+        }
+
+        function closeSwitchAccountModal() {
+            document.getElementById('switch-account-modal').classList.add('hidden');
+        }
+
+        function onSwitchAccountSelectChange(accId) {
+            const acc = accounts.find(a => a.id === accId);
+            const hint = document.getElementById('switch-quick-pass-hint');
+            if (!hint) return;
+            if (acc) {
+                hint.innerText = `Gợi ý MK: ${acc.password || '123456'}`;
+            } else {
+                hint.innerText = '';
+            }
+        }
+
+        function promptSwitchToAccount(accId) {
+            if (accId === currentAccountId) {
+                showToast('Bạn đang sử dụng tài khoản này!', 'info');
+                return;
+            }
+            openSwitchAccountModal(accId);
+        }
+
+        function handleSwitchAccount(e) {
+            e.preventDefault();
+            const select = document.getElementById('switch-target-account');
+            const targetId = select.value;
+            const enteredPass = document.getElementById('switch-password').value.trim();
+            const errBox = document.getElementById('switch-error-box');
+            const errMsg = document.getElementById('switch-error-msg');
+
+            const targetAcc = accounts.find(a => a.id === targetId);
+            if (!targetAcc) return;
+
+            if (targetAcc.status === 'locked') {
+                if (errBox) errBox.classList.remove('hidden');
+                if (errMsg) errMsg.innerText = `Tài khoản "${targetAcc.name}" đang bị khóa!`;
+                return;
+            }
+
+            // Kiểm tra mật khẩu tài khoản đích
+            if (targetAcc.password && targetAcc.password !== enteredPass) {
+                if (errBox) errBox.classList.remove('hidden');
+                if (errMsg) errMsg.innerText = 'Mật khẩu của tài khoản này không chính xác!';
+                return;
+            }
+
+            // Chuyển thành công
+            currentAccountId = targetAcc.id;
+            currentUserRole = (targetAcc.isSuperAdmin || (targetAcc.permissions && targetAcc.permissions.settings_manage)) ? 'admin' : 'staff';
+            targetAcc.lastLogin = new Date().toLocaleString('vi-VN');
+
+            saveAccountsToStorage(true);
+
+            try {
+                localStorage.setItem('vovinam_auth_session', JSON.stringify({
+                    accountId: targetAcc.id,
+                    username: targetAcc.username,
+                    loginTime: new Date().toISOString()
+                }));
+            } catch (err) {}
+
+            closeSwitchAccountModal();
+            populateAccountSwitcher();
+            updateRoleUI();
+            renderStudents();
+            renderClasses();
+            renderPendingApprovals();
+            renderTuitionTable();
+            renderPermissionsMatrix();
+
+            showToast(`Đã chuyển sang tài khoản: ${targetAcc.name} (${targetAcc.roleTitle})`);
+        }
+
+        // ================= ADMIN ĐẶT LẠI MẬT KHẨU CHO NHÂN SỰ =================
+        function openAdminResetPasswordModal(accId) {
+            if (!hasPermission('settings_manage')) {
+                showToast('Tài khoản của bạn không có quyền đặt lại mật khẩu người khác!', 'error');
+                return;
+            }
+
+            const acc = accounts.find(a => a.id === accId);
+            if (!acc) return;
+
+            document.getElementById('admin-reset-acc-id').value = acc.id;
+            document.getElementById('admin-reset-target-name').innerText = acc.name;
+            document.getElementById('admin-reset-target-username').innerText = `Tên đăng nhập: @${acc.username} (${acc.roleTitle})`;
+            document.getElementById('admin-reset-new-password').value = '';
+
+            document.getElementById('admin-reset-password-modal').classList.remove('hidden');
+        }
+
+        function closeAdminResetPasswordModal() {
+            document.getElementById('admin-reset-password-modal').classList.add('hidden');
+        }
+
+        function handleAdminResetPassword(e) {
+            e.preventDefault();
+            if (!hasPermission('settings_manage')) {
+                showToast('Không có quyền quản trị để thực hiện!', 'error');
+                return;
+            }
+
+            const accId = document.getElementById('admin-reset-acc-id').value;
+            const newPass = document.getElementById('admin-reset-new-password').value.trim();
+
+            if (!newPass || newPass.length < 4) {
+                showToast('Vui lòng nhập mật khẩu mới từ 4 ký tự trở lên!', 'error');
+                return;
+            }
+
+            const acc = accounts.find(a => a.id === accId);
+            if (!acc) return;
+
+            acc.password = newPass;
+            acc.passwordChangedAt = new Date().toISOString().split('T')[0];
+
+            saveAccountsToStorage();
+            closeAdminResetPasswordModal();
+            renderPermissionsMatrix();
+            renderQuickLoginList();
+            showToast(`Admin đã đặt lại mật khẩu mới cho ${acc.name} thành công!`);
+        }
+
+        function toggleAccountLock(accId) {
+            if (!hasPermission('settings_manage')) {
+                showToast('Không có quyền quản trị để khóa/mở khóa tài khoản!', 'error');
+                return;
+            }
+
+            const acc = accounts.find(a => a.id === accId);
+            if (!acc || acc.isSuperAdmin) {
+                showToast('Không thể khóa tài khoản Quản Trị Viên tối cao!', 'error');
+                return;
+            }
+
+            const isLocked = acc.status === 'locked';
+            const actionText = isLocked ? 'MỞ KHÓA' : 'TẠM KHÓA';
+
+            showConfirm(`Xác Nhận ${actionText} Tài Khoản`, `Bạn có chắc muốn ${actionText.toLowerCase()} tài khoản "${acc.name}" (@${acc.username})?`, () => {
+                acc.status = isLocked ? 'active' : 'locked';
+                saveAccountsToStorage();
+                renderPermissionsMatrix();
+                renderQuickLoginList();
+
+                // Nếu khóa đúng tài khoản đang đăng nhập -> Đăng xuất
+                if (currentAccountId === accId && acc.status === 'locked') {
+                    handleLogout();
+                } else {
+                    showToast(`Đã ${actionText.toLowerCase()} tài khoản ${acc.name}!`);
+                }
+            });
+        }
+
+        function togglePasswordVisibility(inputId, iconId) {
+            const input = document.getElementById(inputId);
+            const icon = document.getElementById(iconId);
+            if (!input || !icon) return;
+
+            if (input.type === 'password') {
+                input.type = 'text';
+                icon.className = 'fa-solid fa-eye-slash text-xs text-vovinam-blue';
+            } else {
+                input.type = 'password';
+                icon.className = 'fa-solid fa-eye text-xs text-slate-400';
+            }
+        }
+
+        function generateRandomPassword(targetInputId) {
+            const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789@#$';
+            let pwd = 'Vvn';
+            for (let i = 0; i < 5; i++) {
+                pwd += chars.charAt(Math.floor(Math.random() * chars.length));
+            }
+            const input = document.getElementById(targetInputId);
+            if (input) {
+                input.value = pwd;
+                if (input.type === 'password') {
+                    input.type = 'text';
+                }
+                showToast(`Đã tạo mật khẩu ngẫu nhiên: ${pwd}`, 'info');
+            }
+        }
+
     </script>
     <style>
         ::-webkit-scrollbar { width: 6px; height: 6px; }
@@ -100,19 +589,35 @@
             </div>
         </div>
         <div class="flex flex-wrap items-center justify-center gap-2">
-            <span class="text-slate-400">Chuyển tài khoản:</span>
-            <select id="active-account-select" onchange="switchAccount(this.value)" class="bg-slate-800 text-vovinam-gold border border-slate-700 rounded-md px-2 py-1 text-[11px] font-bold focus:outline-none focus:ring-1 focus:ring-vovinam-gold">
-            </select>
-            <button onclick="switchRole('admin')" id="role-btn-admin" class="px-2 py-1 rounded-md text-[11px] font-semibold transition bg-blue-600 text-white shadow-sm">
-                <i class="fa-solid fa-user-shield mr-1"></i> Quản Trị Viên (Admin)
+            <!-- Nút Đổi Mật Khẩu Cá Nhân -->
+            <button onclick="openChangePasswordModal()" title="Đổi mật khẩu tài khoản đang đăng nhập" class="px-2.5 py-1 rounded-md text-[11px] font-semibold transition bg-slate-800 hover:bg-slate-700 text-amber-300 border border-slate-700 flex items-center space-x-1">
+                <i class="fa-solid fa-key text-[10px]"></i>
+                <span>Đổi Mật Khẩu</span>
             </button>
-            <button onclick="switchRole('staff')" id="role-btn-staff" class="px-2 py-1 rounded-md text-[11px] font-semibold transition bg-slate-800 text-slate-300 hover:bg-slate-700">
-                <i class="fa-solid fa-user-pen mr-1"></i> Huấn Luyện Viên (Staff)
+            <!-- Nút Chuyển Tài Khoản (Yêu cầu mật khẩu) -->
+            <button onclick="openSwitchAccountModal()" title="Chuyển sang tài khoản khác (Xác thực mật khẩu)" class="px-2.5 py-1 rounded-md text-[11px] font-semibold transition bg-slate-800 hover:bg-slate-700 text-blue-300 border border-slate-700 flex items-center space-x-1">
+                <i class="fa-solid fa-arrow-right-arrow-left text-[10px]"></i>
+                <span>Đổi Tài Khoản</span>
             </button>
+            <!-- Nút Phân Quyền & Bảo Mật -->
             <button onclick="switchTab('permissions')" class="px-2.5 py-1 rounded-md text-[11px] font-bold transition bg-amber-500 hover:bg-amber-600 text-slate-900 shadow-sm flex items-center space-x-1">
-                <i class="fa-solid fa-user-lock"></i>
-                <span>Phân Quyền</span>
+                <i class="fa-solid fa-shield-halved"></i>
+                <span>Phân Quyền & Bảo Mật</span>
             </button>
+            <!-- Nút Đăng Xuất An Toàn -->
+            <button onclick="handleLogout()" title="Đăng xuất khỏi phiên làm việc an toàn" class="px-2.5 py-1 rounded-md text-[11px] font-bold transition bg-red-600/90 hover:bg-red-700 text-white shadow-sm flex items-center space-x-1">
+                <i class="fa-solid fa-power-off text-[10px]"></i>
+                <span>Đăng Xuất</span>
+            </button>
+            <button onclick="switchRole('admin')" id="role-btn-admin" class="px-2 py-1 rounded-md text-[11px] font-semibold transition bg-blue-600 text-white shadow-sm flex items-center space-x-1">
+                <i class="fa-solid fa-user-shield text-[10px]"></i>
+                <span>Quản Trị Viên (Admin)</span>
+            </button>
+            <button onclick="switchRole('staff')" id="role-btn-staff" class="px-2 py-1 rounded-md text-[11px] font-semibold transition bg-slate-800 text-slate-300 hover:bg-slate-700 flex items-center space-x-1">
+                <i class="fa-solid fa-user-pen text-[10px]"></i>
+                <span>Huấn Luyện Viên (Staff)</span>
+            </button>
+            <select id="active-account-select" onchange="promptSwitchToAccount(this.value)" class="bg-slate-800 text-vovinam-gold border border-slate-700 rounded-md px-2 py-1 text-[11px] font-bold focus:outline-none focus:ring-1 focus:ring-vovinam-gold"></select>
         </div>
     </div>
 
@@ -715,7 +1220,7 @@
                 </div>
             </div>
 
-            <!-- 4 Thẻ Thống Kê Tài Khoản -->
+            <!-- 4 Thẻ Thống Kê Tài Khoản & Bảo Mật -->
             <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 <div class="bg-white p-3.5 rounded-2xl border border-slate-200/80 shadow-sm flex items-center space-x-3">
                     <div class="w-10 h-10 rounded-xl bg-blue-50 text-vovinam-blue flex items-center justify-center text-lg">
@@ -737,7 +1242,7 @@
                 </div>
                 <div class="bg-white p-3.5 rounded-2xl border border-slate-200/80 shadow-sm flex items-center space-x-3">
                     <div class="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center text-lg">
-                        <i class="fa-solid fa-id-badge"></i>
+                        <i class="fa-solid fa-shield-halved"></i>
                     </div>
                     <div>
                         <p class="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Theo Nhiệm Vụ</p>
@@ -749,7 +1254,7 @@
                         <i class="fa-solid fa-circle-user"></i>
                     </div>
                     <div class="min-w-0">
-                        <p class="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Đang Sử Dụng</p>
+                        <p class="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Đang Đăng Nhập</p>
                         <p id="perm-stat-current" class="text-xs sm:text-sm font-black text-purple-700 truncate">Võ Sư Admin</p>
                     </div>
                 </div>
@@ -1815,15 +2320,39 @@
             <form id="account-form" onsubmit="saveAccount(event)" class="p-6 space-y-5 overflow-y-auto flex-1">
                 <input type="hidden" id="acc-id">
 
-                <!-- Thông tin định danh tài khoản -->
+                <!-- Thông tin định danh & Bảo mật tài khoản -->
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                         <label for="acc-name" class="block text-xs font-bold text-slate-700 mb-1">Họ và Tên Người Dùng <span class="text-red-500">*</span></label>
                         <input type="text" id="acc-name" required placeholder="VD: HLV Nguyễn Văn Trí" class="w-full px-3.5 py-2 text-xs sm:text-sm border border-slate-200 rounded-xl focus:ring-2 focus:ring-vovinam-blue focus:outline-none font-bold text-slate-800">
                     </div>
                     <div>
-                        <label for="acc-username" class="block text-xs font-bold text-slate-700 mb-1">Tên Tài Khoản / Mã Nhân Sự <span class="text-red-500">*</span></label>
+                        <label for="acc-username" class="block text-xs font-bold text-slate-700 mb-1">Tên Đăng Nhập (Username) <span class="text-red-500">*</span></label>
                         <input type="text" id="acc-username" required placeholder="VD: hlv_tri hoặc thuquy_ha" class="w-full px-3.5 py-2 text-xs sm:text-sm border border-slate-200 rounded-xl focus:ring-2 focus:ring-vovinam-blue focus:outline-none font-mono text-slate-700">
+                        <p class="text-[10px] text-slate-400 mt-0.5">Dùng để đăng nhập vào hệ thống (viết liền, không dấu).</p>
+                    </div>
+                    <div>
+                        <div class="flex items-center justify-between mb-1">
+                            <label for="acc-password" class="block text-xs font-bold text-slate-700">Mật Khẩu Riêng <span id="acc-pwd-req-badge" class="text-red-500">*</span></label>
+                            <button type="button" onclick="generateRandomPassword('acc-password')" class="text-[10px] font-bold text-vovinam-blue hover:underline">
+                                <i class="fa-solid fa-dice mr-0.5"></i>Tạo MK ngẫu nhiên
+                            </button>
+                        </div>
+                        <div class="relative">
+                            <input type="password" id="acc-password" placeholder="Tối thiểu 4 ký tự..." class="w-full pl-3.5 pr-10 py-2 text-xs sm:text-sm border border-slate-200 rounded-xl focus:ring-2 focus:ring-vovinam-blue focus:outline-none font-mono text-slate-700">
+                            <button type="button" onclick="togglePasswordVisibility('acc-password', 'acc-pwd-eye')" class="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600">
+                                <i id="acc-pwd-eye" class="fa-solid fa-eye text-xs"></i>
+                            </button>
+                        </div>
+                        <p id="acc-pwd-hint" class="text-[10px] text-slate-400 mt-0.5">Mật khẩu riêng bảo mật cho từng người dùng.</p>
+                    </div>
+                    <div>
+                        <label for="acc-status" class="block text-xs font-bold text-slate-700 mb-1">Trạng Thái Hoạt Động</label>
+                        <select id="acc-status" class="w-full px-3.5 py-2 text-xs sm:text-sm border border-slate-200 rounded-xl focus:ring-2 focus:ring-vovinam-blue focus:outline-none font-semibold text-slate-700">
+                            <option value="active">🟢 Đang hoạt động bình thường</option>
+                            <option value="locked">🔴 Tạm khóa tài khoản</option>
+                        </select>
+                        <p class="text-[10px] text-slate-400 mt-0.5">Tài khoản bị khóa sẽ không thể đăng nhập.</p>
                     </div>
                     <div>
                         <label for="acc-role-title" class="block text-xs font-bold text-slate-700 mb-1">Chức Vụ / Nhiệm Vụ Được Giao <span class="text-red-500">*</span></label>
@@ -1920,6 +2449,250 @@
                 <div class="pt-4 border-t border-slate-100 flex justify-end space-x-2">
                     <button type="button" onclick="closeAccountModal()" class="px-4 py-2 bg-slate-100 text-slate-600 hover:bg-slate-200 rounded-xl text-xs font-semibold">Hủy</button>
                     <button type="submit" class="px-5 py-2 bg-vovinam-blue hover:bg-vovinam-darkblue text-white rounded-xl text-xs font-bold shadow-md">Lưu Tài Khoản & Quyền</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+
+    <!-- ================= MODAL: ĐĂNG NHẬP HỆ THỐNG BẢO MẬT (LOGIN OVERLAY) ================= -->
+    <div id="login-modal" class="fixed inset-0 bg-slate-950/85 backdrop-blur-md z-50 flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+        <div class="bg-white rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden border border-slate-200 transform transition-all my-8">
+            <!-- Header Màn Hình Đăng Nhập -->
+            <div class="bg-gradient-to-r from-vovinam-navy via-vovinam-blue to-blue-700 px-6 py-6 text-white text-center relative">
+                <div class="w-16 h-16 bg-white rounded-2xl flex items-center justify-center text-vovinam-blue font-black text-3xl border-2 border-vovinam-gold shadow-lg mx-auto mb-3 overflow-hidden">
+                    <img id="login-site-logo-img" src="" alt="Logo" class="w-full h-full object-cover hidden">
+                    <span id="login-site-logo-text" class="text-vovinam-blue font-black text-2xl">V</span>
+                </div>
+                <h2 id="login-site-title" class="text-lg sm:text-xl font-black uppercase text-vovinam-gold tracking-wide">VOVINAM VIỆT VÕ ĐẠO</h2>
+                <p id="login-site-subtitle" class="text-xs text-blue-100 font-medium mt-1">Cổng Đăng Nhập An Toàn & Bảo Mật Hệ Thống</p>
+                <div class="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full bg-white/10 text-[11px] font-bold text-amber-200 border border-amber-300/30 mt-2.5">
+                    <i class="fa-solid fa-shield-halved text-xs"></i>
+                    <span>Bảo Mật Cấp Cao • Mật Khẩu Riêng Từng Tài Khoản</span>
+                </div>
+            </div>
+
+            <!-- Form Đăng Nhập -->
+            <form onsubmit="handleLogin(event)" class="p-6 space-y-4">
+                <!-- Thông báo lỗi khi đăng nhập thất bại -->
+                <div id="login-error-box" class="hidden p-3 rounded-2xl bg-red-50 border border-red-200 text-xs text-red-700 flex items-start space-x-2">
+                    <i class="fa-solid fa-triangle-exclamation text-red-500 mt-0.5 flex-shrink-0"></i>
+                    <span id="login-error-msg">Tên đăng nhập hoặc mật khẩu không chính xác!</span>
+                </div>
+
+                <div>
+                    <label for="login-username" class="block text-xs font-bold text-slate-700 mb-1.5">Tên Đăng Nhập (Username) <span class="text-red-500">*</span></label>
+                    <div class="relative">
+                        <i class="fa-solid fa-user absolute left-3.5 top-3 text-slate-400 text-sm"></i>
+                        <input type="text" id="login-username" required placeholder="VD: admin hoặc hlv_tri" class="w-full pl-10 pr-3.5 py-2.5 text-xs sm:text-sm border border-slate-200 rounded-xl focus:ring-2 focus:ring-vovinam-blue focus:outline-none font-medium">
+                    </div>
+                </div>
+
+                <div>
+                    <div class="flex items-center justify-between mb-1.5">
+                        <label for="login-password" class="block text-xs font-bold text-slate-700">Mật Khẩu Riêng (Password) <span class="text-red-500">*</span></label>
+                        <span class="text-[11px] text-slate-400">Tối thiểu 4 ký tự</span>
+                    </div>
+                    <div class="relative">
+                        <i class="fa-solid fa-lock absolute left-3.5 top-3 text-slate-400 text-sm"></i>
+                        <input type="password" id="login-password" required placeholder="Nhập mật khẩu riêng của bạn..." class="w-full pl-10 pr-10 py-2.5 text-xs sm:text-sm border border-slate-200 rounded-xl focus:ring-2 focus:ring-vovinam-blue focus:outline-none font-medium">
+                        <button type="button" onclick="togglePasswordVisibility('login-password', 'login-eye-icon')" class="absolute right-3.5 top-3 text-slate-400 hover:text-slate-600 focus:outline-none">
+                            <i id="login-eye-icon" class="fa-solid fa-eye"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="flex items-center justify-between pt-1">
+                    <label class="flex items-center space-x-2 cursor-pointer text-xs text-slate-600">
+                        <input type="checkbox" id="login-remember" checked class="w-4 h-4 rounded text-vovinam-blue focus:ring-vovinam-blue">
+                        <span>Ghi nhớ phiên đăng nhập</span>
+                    </label>
+                    <span class="text-[11px] text-vovinam-blue font-semibold"><i class="fa-solid fa-circle-check mr-1 text-emerald-500"></i>Mã hóa cục bộ</span>
+                </div>
+
+                <button type="submit" class="w-full py-3 bg-vovinam-blue hover:bg-vovinam-darkblue text-white rounded-xl font-bold text-xs sm:text-sm shadow-md transition flex items-center justify-center space-x-2">
+                    <i class="fa-solid fa-right-to-bracket"></i>
+                    <span>Đăng Nhập Vào Hệ Thống</span>
+                </button>
+            </form>
+
+            <!-- Bảng Tài Khoản Mẫu Có Sẵn (Kèm Mật Khẩu Riêng Của Từng Người) -->
+            <div class="px-6 pb-6 pt-2 border-t border-slate-100 bg-slate-50/60">
+                <p class="text-xs font-bold text-slate-700 mb-2.5 flex items-center space-x-1.5">
+                    <i class="fa-solid fa-id-card-clip text-vovinam-blue"></i>
+                    <span>Tài Khoản Mẫu Định Danh & Mật Khẩu Riêng (Bấm để đăng nhập nhanh):</span>
+                </p>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs" id="quick-login-list">
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ================= MODAL: ĐỔI MẬT KHẨU CÁ NHÂN ================= -->
+    <div id="change-password-modal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 hidden flex items-center justify-center p-3 sm:p-4">
+        <div class="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200">
+            <div class="bg-gradient-to-r from-vovinam-navy via-vovinam-blue to-blue-700 px-6 py-4 text-white flex justify-between items-center">
+                <h3 class="text-base font-bold flex items-center space-x-2">
+                    <i class="fa-solid fa-key text-vovinam-gold"></i>
+                    <span>Đổi Mật Khẩu Cá Nhân</span>
+                </h3>
+                <button onclick="closeChangePasswordModal()" class="text-white/80 hover:text-white text-xl">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+            <form onsubmit="handleChangePassword(event)" class="p-6 space-y-4">
+                <div class="p-3 bg-blue-50/80 rounded-2xl border border-blue-100 text-xs text-blue-900 flex items-center space-x-2.5">
+                    <div class="w-8 h-8 rounded-xl bg-vovinam-blue text-white flex items-center justify-center font-bold text-sm flex-shrink-0" id="cp-user-avatar">V</div>
+                    <div>
+                        <div class="font-bold text-slate-800" id="cp-user-name">Võ Sư Admin</div>
+                        <div class="text-[11px] text-slate-500 font-mono" id="cp-user-username">ID: @admin</div>
+                    </div>
+                </div>
+
+                <div id="cp-error-box" class="hidden p-3 rounded-2xl bg-red-50 border border-red-200 text-xs text-red-700 flex items-start space-x-2">
+                    <i class="fa-solid fa-circle-exclamation text-red-500 mt-0.5 flex-shrink-0"></i>
+                    <span id="cp-error-msg"></span>
+                </div>
+
+                <div>
+                    <label for="cp-current-password" class="block text-xs font-bold text-slate-700 mb-1">Mật Khẩu Hiện Tại <span class="text-red-500">*</span></label>
+                    <div class="relative">
+                        <input type="password" id="cp-current-password" required placeholder="Nhập mật khẩu đang dùng..." class="w-full pl-3.5 pr-10 py-2 text-xs sm:text-sm border border-slate-200 rounded-xl focus:ring-2 focus:ring-vovinam-blue focus:outline-none font-mono">
+                        <button type="button" onclick="togglePasswordVisibility('cp-current-password', 'cp-eye-current')" class="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600">
+                            <i id="cp-eye-current" class="fa-solid fa-eye"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <div>
+                    <label for="cp-new-password" class="block text-xs font-bold text-slate-700 mb-1">Mật Khẩu Mới <span class="text-red-500">*</span></label>
+                    <div class="relative">
+                        <input type="password" id="cp-new-password" required oninput="checkNewPasswordStrength(this.value)" placeholder="Tối thiểu 4 ký tự..." class="w-full pl-3.5 pr-10 py-2 text-xs sm:text-sm border border-slate-200 rounded-xl focus:ring-2 focus:ring-vovinam-blue focus:outline-none font-mono">
+                        <button type="button" onclick="togglePasswordVisibility('cp-new-password', 'cp-eye-new')" class="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600">
+                            <i id="cp-eye-new" class="fa-solid fa-eye"></i>
+                        </button>
+                    </div>
+                    <!-- Thanh đo độ mạnh mật khẩu -->
+                    <div class="mt-2 space-y-1">
+                        <div class="flex justify-between items-center text-[10px]">
+                            <span class="text-slate-400 font-semibold">Độ bảo mật:</span>
+                            <span id="cp-strength-text" class="font-bold text-slate-500">Chưa nhập</span>
+                        </div>
+                        <div class="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
+                            <div id="cp-strength-bar" class="h-1.5 w-0 bg-slate-300 transition-all duration-300"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div>
+                    <label for="cp-confirm-password" class="block text-xs font-bold text-slate-700 mb-1">Xác Nhận Mật Khẩu Mới <span class="text-red-500">*</span></label>
+                    <div class="relative">
+                        <input type="password" id="cp-confirm-password" required placeholder="Nhập lại mật khẩu mới..." class="w-full pl-3.5 pr-10 py-2 text-xs sm:text-sm border border-slate-200 rounded-xl focus:ring-2 focus:ring-vovinam-blue focus:outline-none font-mono">
+                        <button type="button" onclick="togglePasswordVisibility('cp-confirm-password', 'cp-eye-confirm')" class="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600">
+                            <i id="cp-eye-confirm" class="fa-solid fa-eye"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="pt-3 flex justify-end space-x-2 border-t border-slate-100">
+                    <button type="button" onclick="closeChangePasswordModal()" class="px-4 py-2 bg-slate-100 text-slate-600 hover:bg-slate-200 rounded-xl text-xs font-semibold">Hủy</button>
+                    <button type="submit" class="px-5 py-2 bg-vovinam-blue hover:bg-vovinam-darkblue text-white rounded-xl text-xs font-bold shadow-md transition">Lưu Mật Khẩu Mới</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- ================= MODAL: CHUYỂN TÀI KHOẢN CÓ XÁC THỰC MẬT KHẨU ================= -->
+    <div id="switch-account-modal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 hidden flex items-center justify-center p-3 sm:p-4">
+        <div class="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200">
+            <div class="bg-gradient-to-r from-vovinam-navy via-vovinam-blue to-blue-700 px-6 py-4 text-white flex justify-between items-center">
+                <h3 class="text-base font-bold flex items-center space-x-2">
+                    <i class="fa-solid fa-arrow-right-arrow-left text-vovinam-gold"></i>
+                    <span>Chuyển Đổi Tài Khoản An Toàn</span>
+                </h3>
+                <button onclick="closeSwitchAccountModal()" class="text-white/80 hover:text-white text-xl">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+            <form onsubmit="handleSwitchAccount(event)" class="p-6 space-y-4">
+                <p class="text-xs text-slate-500">Chọn tài khoản muốn chuyển tới và nhập mật khẩu riêng của tài khoản đó để tiếp tục:</p>
+
+                <div id="switch-error-box" class="hidden p-3 rounded-2xl bg-red-50 border border-red-200 text-xs text-red-700 flex items-start space-x-2">
+                    <i class="fa-solid fa-circle-exclamation text-red-500 mt-0.5 flex-shrink-0"></i>
+                    <span id="switch-error-msg">Mật khẩu tài khoản không đúng!</span>
+                </div>
+
+                <div>
+                    <label for="switch-target-account" class="block text-xs font-bold text-slate-700 mb-1">Chọn Tài Khoản Cần Chuyển Tới</label>
+                    <select id="switch-target-account" onchange="onSwitchAccountSelectChange(this.value)" class="w-full px-3.5 py-2 text-xs sm:text-sm border border-slate-200 rounded-xl focus:ring-2 focus:ring-vovinam-blue focus:outline-none font-bold text-slate-800">
+                    </select>
+                </div>
+
+                <div>
+                    <div class="flex items-center justify-between mb-1">
+                        <label for="switch-password" class="block text-xs font-bold text-slate-700">Mật Khẩu Của Tài Khoản Này <span class="text-red-500">*</span></label>
+                        <span id="switch-quick-pass-hint" class="text-[11px] text-vovinam-blue font-semibold"></span>
+                    </div>
+                    <div class="relative">
+                        <input type="password" id="switch-password" required placeholder="Nhập mật khẩu riêng..." class="w-full pl-3.5 pr-10 py-2 text-xs sm:text-sm border border-slate-200 rounded-xl focus:ring-2 focus:ring-vovinam-blue focus:outline-none font-mono">
+                        <button type="button" onclick="togglePasswordVisibility('switch-password', 'switch-eye-icon')" class="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600">
+                            <i id="switch-eye-icon" class="fa-solid fa-eye"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="pt-3 flex justify-between items-center border-t border-slate-100">
+                    <button type="button" onclick="handleLogout()" class="text-xs font-bold text-red-600 hover:underline">
+                        <i class="fa-solid fa-power-off mr-1"></i>Đăng xuất hẳn
+                    </button>
+                    <div class="flex space-x-2">
+                        <button type="button" onclick="closeSwitchAccountModal()" class="px-4 py-2 bg-slate-100 text-slate-600 hover:bg-slate-200 rounded-xl text-xs font-semibold">Hủy</button>
+                        <button type="submit" class="px-5 py-2 bg-vovinam-blue hover:bg-vovinam-darkblue text-white rounded-xl text-xs font-bold shadow-md transition">Xác Nhận Đổi</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- ================= MODAL: ADMIN ĐẶT LẠI MẬT KHẨU CHO NHÂN SỰ ================= -->
+    <div id="admin-reset-password-modal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 hidden flex items-center justify-center p-3 sm:p-4">
+        <div class="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200">
+            <div class="bg-amber-600 px-6 py-4 text-white flex justify-between items-center">
+                <h3 class="text-base font-bold flex items-center space-x-2">
+                    <i class="fa-solid fa-key"></i>
+                    <span>Admin Đặt Lại Mật Khẩu Tài Khoản</span>
+                </h3>
+                <button onclick="closeAdminResetPasswordModal()" class="text-white/80 hover:text-white text-xl">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+            <form onsubmit="handleAdminResetPassword(event)" class="p-6 space-y-4">
+                <input type="hidden" id="admin-reset-acc-id">
+
+                <div class="p-3 bg-amber-50 rounded-2xl border border-amber-200 text-xs text-amber-900 space-y-1">
+                    <p class="font-bold text-slate-800" id="admin-reset-target-name">HLV Nguyễn Văn Trí</p>
+                    <p class="text-[11px] text-slate-500 font-mono" id="admin-reset-target-username">ID: @hlv_tri</p>
+                    <p class="text-[11px] text-amber-800 italic">Quản trị viên có quyền đặt lại mật khẩu mới trực tiếp mà không cần mật khẩu cũ của người dùng.</p>
+                </div>
+
+                <div>
+                    <div class="flex items-center justify-between mb-1">
+                        <label for="admin-reset-new-password" class="block text-xs font-bold text-slate-700">Mật Khẩu Mới Thiết Lập <span class="text-red-500">*</span></label>
+                        <button type="button" onclick="generateRandomPassword('admin-reset-new-password')" class="text-[11px] text-vovinam-blue hover:underline font-bold">
+                            <i class="fa-solid fa-dice mr-1"></i>Tạo ngẫu nhiên
+                        </button>
+                    </div>
+                    <div class="relative">
+                        <input type="password" id="admin-reset-new-password" required placeholder="Tối thiểu 4 ký tự..." class="w-full pl-3.5 pr-10 py-2 text-xs sm:text-sm border border-slate-200 rounded-xl focus:ring-2 focus:ring-amber-500 focus:outline-none font-mono">
+                        <button type="button" onclick="togglePasswordVisibility('admin-reset-new-password', 'admin-reset-eye')" class="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600">
+                            <i id="admin-reset-eye" class="fa-solid fa-eye"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="pt-3 flex justify-end space-x-2 border-t border-slate-100">
+                    <button type="button" onclick="closeAdminResetPasswordModal()" class="px-4 py-2 bg-slate-100 text-slate-600 hover:bg-slate-200 rounded-xl text-xs font-semibold">Hủy</button>
+                    <button type="submit" class="px-5 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold shadow-md transition">Lưu Mật Khẩu</button>
                 </div>
             </form>
         </div>
@@ -2063,12 +2836,16 @@
             'vovinam-gold-v': 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" rx="25" fill="%23002651" stroke="%23f59e0b" stroke-width="4"/><path d="M25 25 L45 75 L55 75 L75 25 L62 25 L50 60 L38 25 Z" fill="%23f59e0b"/><polygon points="50,15 54,23 63,24 57,30 58,39 50,34 42,39 43,30 37,24 46,23" fill="%23dc2626"/></svg>'
         };
 
-        // Danh sách tài khoản và phân quyền mẫu ban đầu
+        // Danh sách tài khoản và phân quyền mẫu ban đầu (Có mật khẩu riêng từng người)
         const DEFAULT_ACCOUNTS = [
             {
                 id: 'ACC-ADMIN',
                 name: 'Võ Sư Admin',
                 username: 'admin',
+                password: 'admin123',
+                status: 'active',
+                passwordChangedAt: '2026-10-22',
+                lastLogin: '',
                 roleTitle: 'Chủ Nhiệm CLB (Quản Trị Tối Cao)',
                 roleType: 'admin',
                 isSuperAdmin: true,
@@ -2087,6 +2864,10 @@
                 id: 'ACC-HLV-TRI',
                 name: 'HLV Nguyễn Văn Trí',
                 username: 'hlv_tri',
+                password: 'tri123',
+                status: 'active',
+                passwordChangedAt: '2026-10-22',
+                lastLogin: '',
                 roleTitle: 'HLV Phụ Trách Lớp Chiều & Điểm Danh',
                 roleType: 'staff',
                 isSuperAdmin: false,
@@ -2105,6 +2886,10 @@
                 id: 'ACC-THUQUY-HA',
                 name: 'Lê Thu Hà (Thủ Quỹ)',
                 username: 'thuquy_ha',
+                password: 'ha123',
+                status: 'active',
+                passwordChangedAt: '2026-10-22',
+                lastLogin: '',
                 roleTitle: 'Kế Toán & Quản Lý Học Phí CLB',
                 roleType: 'staff',
                 isSuperAdmin: false,
@@ -2123,6 +2908,10 @@
                 id: 'ACC-VOSU-SON',
                 name: 'Võ Sư Lê Thanh Sơn',
                 username: 'vosu_son',
+                password: 'son123',
+                status: 'active',
+                passwordChangedAt: '2026-10-22',
+                lastLogin: '',
                 roleTitle: 'Phó Chủ Nhiệm Phụ Trách Đào Tạo',
                 roleType: 'staff',
                 isSuperAdmin: false,
@@ -2186,6 +2975,8 @@
 
         // Khởi động hệ thống
         window.onload = function() {
+            // Kiểm tra trạng thái xác thực phiên làm việc
+            initAuthSession();
             const today = new Date().toISOString().split('T')[0];
             document.getElementById('attendance-date').value = today;
 
@@ -2267,6 +3058,19 @@
                 const acc = localStorage.getItem('vovinam_accounts');
                 if (acc) {
                     accounts = JSON.parse(acc);
+                    // Đảm bảo mọi tài khoản đều có mật khẩu riêng và trạng thái bảo mật
+                    accounts.forEach(a => {
+                        if (!a.password) {
+                            if (a.username === 'admin') a.password = 'admin123';
+                            else if (a.username === 'hlv_tri') a.password = 'tri123';
+                            else if (a.username === 'thuquy_ha') a.password = 'ha123';
+                            else if (a.username === 'vosu_son') a.password = 'son123';
+                            else a.password = a.username ? `${a.username}123` : '123456';
+                        }
+                        if (!a.status) a.status = 'active';
+                        if (!a.passwordChangedAt) a.passwordChangedAt = '2026-10-22';
+                    });
+                    saveAccountsToStorage(true);
                 } else {
                     accounts = JSON.parse(JSON.stringify(DEFAULT_ACCOUNTS));
                     saveAccountsToStorage(true);
@@ -2402,20 +3206,24 @@
             if (role === 'admin') {
                 const adminAcc = accounts.find(a => a.isSuperAdmin) || accounts[0];
                 if (adminAcc) {
-                    switchAccount(adminAcc.id);
+                    if (adminAcc.id === currentAccountId) {
+                        showToast('Bạn đang sử dụng tài khoản Quản Trị Viên!', 'info');
+                        return;
+                    }
+                    openSwitchAccountModal(adminAcc.id);
                     return;
                 }
             } else {
                 const staffAcc = accounts.find(a => !a.isSuperAdmin) || accounts[1] || accounts[0];
                 if (staffAcc) {
-                    switchAccount(staffAcc.id);
+                    if (staffAcc.id === currentAccountId) {
+                        showToast('Bạn đang sử dụng tài khoản Huấn Luyện Viên!', 'info');
+                        return;
+                    }
+                    openSwitchAccountModal(staffAcc.id);
                     return;
                 }
             }
-            currentUserRole = role;
-            updateRoleUI();
-            renderStudents();
-            renderPendingApprovals();
         }
 
         function updateRoleUI() {
@@ -2568,23 +3376,20 @@
             }
         }
 
-        // ================= QUẢN LÝ MA TRẬN PHÂN QUYỀN TÀI KHOẢN =================
+        // ================= QUẢN LÝ MA TRẬN PHÂN QUYỀN & BẢO MẬT TÀI KHOẢN =================
         function renderPermissionsMatrix() {
             const tbody = document.getElementById('permissions-matrix-body');
             if (!tbody) return;
 
             const totalEl = document.getElementById('perm-stat-total');
             const adminsEl = document.getElementById('perm-stat-admins');
-            const customEl = document.getElementById('perm-stat-custom');
             const curEl = document.getElementById('perm-stat-current');
 
             const adminCount = accounts.filter(a => a.isSuperAdmin || (a.permissions && a.permissions.settings_manage)).length;
-            const customCount = accounts.length - adminCount;
             const curAcc = getCurrentAccount();
 
             if (totalEl) totalEl.innerText = `${accounts.length} tài khoản`;
             if (adminsEl) adminsEl.innerText = `${adminCount} tài khoản`;
-            if (customEl) customEl.innerText = `${customCount} tài khoản`;
             if (curEl && curAcc) curEl.innerText = curAcc.name;
 
             const canEditPerms = hasPermission('settings_manage');
@@ -2592,20 +3397,28 @@
 
             tbody.innerHTML = accounts.map(acc => {
                 const isCurrent = acc.id === currentAccountId;
+                const isLocked = acc.status === 'locked';
                 return `
-                    <tr class="hover:bg-blue-50/30 transition border-b border-slate-100 ${isCurrent ? 'bg-blue-50/40' : ''}">
+                    <tr class="hover:bg-blue-50/30 transition border-b border-slate-100 ${isCurrent ? 'bg-blue-50/40' : ''} ${isLocked ? 'bg-red-50/30' : ''}">
                         <td class="py-3.5 px-4">
                             <div class="flex items-center space-x-2.5">
-                                <div class="w-9 h-9 rounded-xl ${acc.isSuperAdmin ? 'bg-vovinam-blue text-vovinam-gold' : 'bg-slate-100 text-slate-700'} font-black text-sm flex items-center justify-center flex-shrink-0 border border-slate-200">
+                                <div class="w-9 h-9 rounded-xl ${acc.isSuperAdmin ? 'bg-vovinam-blue text-vovinam-gold' : (isLocked ? 'bg-red-100 text-red-600' : 'bg-slate-100 text-slate-700')} font-black text-sm flex items-center justify-center flex-shrink-0 border border-slate-200">
                                     ${acc.name.charAt(0).toUpperCase()}
                                 </div>
                                 <div>
-                                    <div class="flex items-center space-x-1.5">
+                                    <div class="flex items-center space-x-1.5 flex-wrap">
                                         <span class="font-bold text-slate-800 text-xs sm:text-sm">${acc.name}</span>
                                         ${isCurrent ? '<span class="px-1.5 py-0.5 text-[9px] font-bold bg-emerald-500 text-white rounded-md uppercase">Đang dùng</span>' : ''}
+                                        ${isLocked ? '<span class="px-1.5 py-0.5 text-[9px] font-bold bg-red-600 text-white rounded-md uppercase">Tạm khóa</span>' : '<span class="px-1.5 py-0.5 text-[9px] font-bold bg-emerald-100 text-emerald-800 rounded-md">Hoạt động</span>'}
                                     </div>
                                     <div class="text-[11px] font-semibold text-vovinam-blue">${acc.roleTitle}</div>
-                                    <div class="text-[10px] text-slate-400 font-mono">ID: @${acc.username} • ${acc.assignedClasses || 'Tất cả các lớp'}</div>
+                                    <div class="text-[10px] text-slate-500 font-mono flex items-center space-x-1 mt-0.5">
+                                        <span class="text-blue-700 font-bold">@${acc.username}</span>
+                                        <span>•</span>
+                                        <span class="text-slate-400">MK riêng: ••••••••</span>
+                                        <span>•</span>
+                                        <span class="text-slate-400">${acc.assignedClasses || 'Tất cả các lớp'}</span>
+                                    </div>
                                 </div>
                             </div>
                         </td>
@@ -2624,10 +3437,18 @@
                         }).join('')}
                         <td class="py-3 px-3 text-center">
                             <div class="flex items-center justify-center space-x-1">
-                                <button onclick="switchAccount('${acc.id}')" title="Chuyển sang dùng tài khoản này" class="px-2.5 py-1 rounded-lg text-[11px] font-bold transition ${isCurrent ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 hover:bg-vovinam-blue hover:text-white text-slate-700'}">
-                                    ${isCurrent ? 'Đang chọn' : 'Dùng thử'}
+                                <button onclick="promptSwitchToAccount('${acc.id}')" title="Đăng nhập tài khoản này (Cần mật khẩu)" class="px-2 py-1 rounded-lg text-[11px] font-bold transition ${isCurrent ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 hover:bg-vovinam-blue hover:text-white text-slate-700'}">
+                                    ${isCurrent ? 'Đang dùng' : 'Đăng nhập'}
                                 </button>
                                 ${canEditPerms ? `
+                                    <button onclick="openAdminResetPasswordModal('${acc.id}')" title="Admin đặt lại mật khẩu" class="p-1.5 text-amber-600 hover:bg-amber-50 rounded-lg transition">
+                                        <i class="fa-solid fa-key"></i>
+                                    </button>
+                                    ${!acc.isSuperAdmin ? `
+                                        <button onclick="toggleAccountLock('${acc.id}')" title="${isLocked ? 'Mở khóa tài khoản' : 'Khóa tài khoản'}" class="p-1.5 ${isLocked ? 'text-emerald-600 hover:bg-emerald-50' : 'text-slate-500 hover:text-red-600 hover:bg-red-50'} rounded-lg transition">
+                                            <i class="fa-solid ${isLocked ? 'fa-lock-open' : 'fa-user-lock'}"></i>
+                                        </button>
+                                    ` : ''}
                                     <button onclick="editAccount('${acc.id}')" title="Sửa tài khoản & quyền" class="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition">
                                         <i class="fa-solid fa-pen-to-square"></i>
                                     </button>
@@ -2676,21 +3497,34 @@
             const title = document.getElementById('account-modal-title');
             form.reset();
 
+            const pwdInput = document.getElementById('acc-password');
+            const pwdReq = document.getElementById('acc-pwd-req-badge');
+            const pwdHint = document.getElementById('acc-pwd-hint');
+            const statusSelect = document.getElementById('acc-status');
+
             if (!isEdit) {
-                title.innerHTML = '<i class="fa-solid fa-user-plus text-vovinam-gold mr-1.5"></i><span>Thêm Tài Khoản & Phân Quyền Mới</span>';
+                title.innerHTML = '<i class="fa-solid fa-user-plus text-vovinam-gold mr-1.5"></i><span>Thêm Tài Khoản & Mật Khẩu Riêng</span>';
                 document.getElementById('acc-id').value = '';
                 document.getElementById('acc-assigned-class').value = 'Tất cả các lớp';
+                if (pwdInput) { pwdInput.required = true; pwdInput.value = ''; }
+                if (pwdReq) pwdReq.classList.remove('hidden');
+                if (pwdHint) pwdHint.innerText = 'Thiết lập mật khẩu khởi tạo cho tài khoản này (tối thiểu 4 ký tự).';
+                if (statusSelect) statusSelect.value = 'active';
                 applyRolePreset('coach');
             } else {
                 const acc = accounts.find(a => a.id === accId);
                 if (!acc) return;
 
-                title.innerHTML = '<i class="fa-solid fa-user-pen text-vovinam-gold mr-1.5"></i><span>Cập Nhật Tài Khoản & Phân Quyền</span>';
+                title.innerHTML = '<i class="fa-solid fa-user-pen text-vovinam-gold mr-1.5"></i><span>Cập Nhật Tài Khoản & Mật Khẩu</span>';
                 document.getElementById('acc-id').value = acc.id;
                 document.getElementById('acc-name').value = acc.name || '';
                 document.getElementById('acc-username').value = acc.username || '';
                 document.getElementById('acc-role-title').value = acc.roleTitle || '';
                 document.getElementById('acc-assigned-class').value = acc.assignedClasses || 'Tất cả các lớp';
+                if (pwdInput) { pwdInput.required = false; pwdInput.value = ''; }
+                if (pwdReq) pwdReq.classList.add('hidden');
+                if (pwdHint) pwdHint.innerText = 'Để trống nếu muốn giữ nguyên mật khẩu cũ của tài khoản.';
+                if (statusSelect) statusSelect.value = acc.status || 'active';
 
                 const perms = acc.permissions || {};
                 document.getElementById('perm-students-direct').checked = acc.isSuperAdmin || Boolean(perms.students_direct);
@@ -2771,9 +3605,24 @@
 
             const id = document.getElementById('acc-id').value;
             const name = document.getElementById('acc-name').value.trim();
-            const username = document.getElementById('acc-username').value.trim();
+            const username = document.getElementById('acc-username').value.trim().toLowerCase().replace(/\s+/g, '_');
             const roleTitle = document.getElementById('acc-role-title').value.trim();
             const assignedClasses = document.getElementById('acc-assigned-class').value.trim() || 'Tất cả các lớp';
+            const passwordInput = document.getElementById('acc-password').value.trim();
+            const statusSelect = document.getElementById('acc-status');
+            const status = statusSelect ? statusSelect.value : 'active';
+
+            if (!name || !username) {
+                showToast('Vui lòng điền đầy đủ họ tên và tên đăng nhập!', 'error');
+                return;
+            }
+
+            // Kiểm tra trùng username
+            const duplicate = accounts.find(a => a.username.toLowerCase() === username.toLowerCase() && a.id !== id);
+            if (duplicate) {
+                showToast(`Tên đăng nhập "@${username}" đã tồn tại! Vui lòng chọn tên khác.`, 'error');
+                return;
+            }
 
             const permissions = {
                 students_direct: document.getElementById('perm-students-direct').checked,
@@ -2789,12 +3638,16 @@
                 const idx = accounts.findIndex(a => a.id === id);
                 if (idx !== -1) {
                     const isSuper = accounts[idx].isSuperAdmin;
+                    const updatedPassword = passwordInput ? passwordInput : accounts[idx].password;
                     accounts[idx] = {
                         ...accounts[idx],
                         name,
                         username,
                         roleTitle,
                         assignedClasses,
+                        status: isSuper ? 'active' : status,
+                        password: updatedPassword,
+                        passwordChangedAt: passwordInput ? new Date().toISOString().split('T')[0] : accounts[idx].passwordChangedAt,
                         permissions: isSuper ? {
                             students_direct: true,
                             classes_manage: true,
@@ -2805,13 +3658,21 @@
                             settings_manage: true
                         } : permissions
                     };
-                    showToast(`Đã cập nhật tài khoản và quyền hạn cho ${name}!`);
+                    showToast(`Đã cập nhật tài khoản và bảo mật cho ${name}!`);
                 }
             } else {
+                if (!passwordInput || passwordInput.length < 4) {
+                    showToast('Vui lòng nhập mật khẩu khởi tạo từ 4 ký tự trở lên!', 'error');
+                    return;
+                }
                 const newAcc = {
                     id: 'ACC-' + Date.now(),
                     name,
                     username,
+                    password: passwordInput,
+                    status: status,
+                    passwordChangedAt: new Date().toISOString().split('T')[0],
+                    lastLogin: '',
                     roleTitle,
                     roleType: permissions.settings_manage ? 'admin' : 'staff',
                     isSuperAdmin: false,
@@ -2819,7 +3680,7 @@
                     permissions
                 };
                 accounts.push(newAcc);
-                showToast(`Đã tạo tài khoản "${name}" và gán quyền thành công!`);
+                showToast(`Đã tạo tài khoản "${name}" với tên đăng nhập @${username} và mật khẩu riêng!`);
             }
 
             saveAccountsToStorage();
@@ -2827,6 +3688,7 @@
             populateAccountSwitcher();
             updateRoleUI();
             renderPermissionsMatrix();
+            renderQuickLoginList();
         }
 
         function deleteAccount(accId) {
@@ -5536,6 +6398,495 @@
                 }
             );
         }
+
+        // ================= CƠ CHẾ XÁC THỰC, ĐĂNG NHẬP & BẢO MẬT MẬT KHẨU =================
+        function initAuthSession() {
+            let session = null;
+            try {
+                const s = localStorage.getItem('vovinam_auth_session');
+                if (s) session = JSON.parse(s);
+            } catch (e) {
+                session = null;
+            }
+
+            const loginModal = document.getElementById('login-modal');
+            renderQuickLoginList();
+
+            if (session && session.accountId) {
+                const acc = accounts.find(a => a.id === session.accountId);
+                if (acc && acc.status !== 'locked') {
+                    currentAccountId = acc.id;
+                    currentUserRole = (acc.isSuperAdmin || (acc.permissions && acc.permissions.settings_manage)) ? 'admin' : 'staff';
+                    if (loginModal) loginModal.classList.add('hidden');
+                    return;
+                }
+            }
+
+            // Nếu chưa có phiên đăng nhập hợp lệ hoặc tài khoản bị khóa -> Mở màn hình đăng nhập
+            if (loginModal) {
+                loginModal.classList.remove('hidden');
+                updateLoginBranding();
+            }
+        }
+
+        function updateLoginBranding() {
+            const logoImg = document.getElementById('login-site-logo-img');
+            const logoText = document.getElementById('login-site-logo-text');
+            const titleEl = document.getElementById('login-site-title');
+            const subTitleEl = document.getElementById('login-site-subtitle');
+
+            if (titleEl) titleEl.innerText = siteConfig.title || 'VOVINAM VIỆT VÕ ĐẠO';
+            if (subTitleEl) subTitleEl.innerText = siteConfig.subtitle || 'Hệ Thống Quản Lý Võ Sinh & Điểm Danh Chuyên Cần';
+
+            if (siteConfig.logo) {
+                if (logoImg) {
+                    logoImg.src = siteConfig.logo;
+                    logoImg.classList.remove('hidden');
+                }
+                if (logoText) logoText.classList.add('hidden');
+            } else {
+                if (logoImg) logoImg.classList.add('hidden');
+                if (logoText) {
+                    logoText.innerText = (siteConfig.title ? siteConfig.title.trim().charAt(0) : 'V').toUpperCase();
+                    logoText.classList.remove('hidden');
+                }
+            }
+        }
+
+        function renderQuickLoginList() {
+            const container = document.getElementById('quick-login-list');
+            if (!container) return;
+
+            container.innerHTML = accounts.map(acc => {
+                const isLocked = acc.status === 'locked';
+                const roleColor = acc.isSuperAdmin ? 'bg-amber-50 border-amber-200 text-amber-900' : 'bg-white border-slate-200 text-slate-800';
+                return `
+                    <button type="button" onclick="quickLogin('${acc.username}', '${acc.password || ''}')"
+                        class="p-2.5 rounded-2xl border ${roleColor} hover:border-vovinam-blue hover:shadow-sm transition text-left flex items-center justify-between group">
+                        <div class="flex items-center space-x-2">
+                            <div class="w-7 h-7 rounded-lg ${acc.isSuperAdmin ? 'bg-vovinam-blue text-vovinam-gold' : 'bg-slate-200 text-slate-700'} flex items-center justify-center font-black text-xs">
+                                ${acc.name.charAt(0).toUpperCase()}
+                            </div>
+                            <div class="min-w-0">
+                                <div class="font-bold text-xs truncate group-hover:text-vovinam-blue">${acc.name}</div>
+                                <div class="text-[10px] text-slate-500 font-mono">@${acc.username} | MK: <span class="text-amber-700 font-bold">${acc.password || '123456'}</span></div>
+                            </div>
+                        </div>
+                        <i class="fa-solid fa-arrow-right-to-bracket text-slate-300 group-hover:text-vovinam-blue text-xs transition"></i>
+                    </button>
+                `;
+            }).join('');
+        }
+
+        function quickLogin(username, password) {
+            const userInp = document.getElementById('login-username');
+            const passInp = document.getElementById('login-password');
+            if (userInp) userInp.value = username;
+            if (passInp) passInp.value = password;
+            performLogin(username, password);
+        }
+
+        function handleLogin(e) {
+            e.preventDefault();
+            const username = document.getElementById('login-username').value.trim();
+            const password = document.getElementById('login-password').value.trim();
+            performLogin(username, password);
+        }
+
+        function performLogin(username, password) {
+            const errorBox = document.getElementById('login-error-box');
+            const errorMsg = document.getElementById('login-error-msg');
+
+            const acc = accounts.find(a => a.username.toLowerCase() === username.toLowerCase());
+
+            if (!acc) {
+                if (errorBox) errorBox.classList.remove('hidden');
+                if (errorMsg) errorMsg.innerText = `Tên đăng nhập "@${username}" không tồn tại trên hệ thống!`;
+                return;
+            }
+
+            if (acc.status === 'locked') {
+                if (errorBox) errorBox.classList.remove('hidden');
+                if (errorMsg) errorMsg.innerText = `Tài khoản "${acc.name}" (@${acc.username}) đang bị tạm khóa. Vui lòng liên hệ Admin!`;
+                return;
+            }
+
+            // Kiểm tra mật khẩu
+            if (acc.password && acc.password !== password) {
+                if (errorBox) errorBox.classList.remove('hidden');
+                if (errorMsg) errorMsg.innerText = 'Mật khẩu không chính xác! Vui lòng kiểm tra lại.';
+                return;
+            }
+
+            // Đăng nhập thành công!
+            if (errorBox) errorBox.classList.add('hidden');
+
+            currentAccountId = acc.id;
+            currentUserRole = (acc.isSuperAdmin || (acc.permissions && acc.permissions.settings_manage)) ? 'admin' : 'staff';
+            acc.lastLogin = new Date().toLocaleString('vi-VN');
+
+            saveAccountsToStorage(true);
+
+            // Lưu phiên
+            try {
+                const sessionData = {
+                    accountId: acc.id,
+                    username: acc.username,
+                    loginTime: new Date().toISOString()
+                };
+                localStorage.setItem('vovinam_auth_session', JSON.stringify(sessionData));
+            } catch (err) {}
+
+            document.getElementById('login-modal').classList.add('hidden');
+            updateRoleUI();
+            renderPermissionsMatrix();
+            populateAccountSwitcher();
+            showToast(`Đăng nhập thành công! Xin chào ${acc.name} (${acc.roleTitle}).`);
+        }
+
+        function handleLogout() {
+            showConfirm('Xác Nhận Đăng Xuất', 'Bạn có chắc chắn muốn đăng xuất khỏi phiên làm việc an toàn hiện tại?', () => {
+                try {
+                    localStorage.removeItem('vovinam_auth_session');
+                } catch (e) {}
+
+                const loginModal = document.getElementById('login-modal');
+                const userInp = document.getElementById('login-username');
+                const passInp = document.getElementById('login-password');
+                const errBox = document.getElementById('login-error-box');
+
+                if (userInp) userInp.value = '';
+                if (passInp) passInp.value = '';
+                if (errBox) errBox.classList.add('hidden');
+
+                closeSwitchAccountModal();
+                closeChangePasswordModal();
+                updateLoginBranding();
+                renderQuickLoginList();
+
+                if (loginModal) loginModal.classList.remove('hidden');
+                showToast('Đã đăng xuất an toàn khỏi hệ thống!', 'info');
+            });
+        }
+
+        // ================= ĐỔI MẬT KHẨU CÁ NHÂN =================
+        function openChangePasswordModal() {
+            const acc = getCurrentAccount();
+            if (!acc) return;
+
+            const modal = document.getElementById('change-password-modal');
+            const avatar = document.getElementById('cp-user-avatar');
+            const nameEl = document.getElementById('cp-user-name');
+            const userEl = document.getElementById('cp-user-username');
+            const errBox = document.getElementById('cp-error-box');
+
+            if (avatar) avatar.innerText = acc.name.charAt(0).toUpperCase();
+            if (nameEl) nameEl.innerText = acc.name;
+            if (userEl) userEl.innerText = `Tên đăng nhập: @${acc.username}`;
+            if (errBox) errBox.classList.add('hidden');
+
+            document.getElementById('cp-current-password').value = '';
+            document.getElementById('cp-new-password').value = '';
+            document.getElementById('cp-confirm-password').value = '';
+            checkNewPasswordStrength('');
+
+            modal.classList.remove('hidden');
+        }
+
+        function closeChangePasswordModal() {
+            document.getElementById('change-password-modal').classList.add('hidden');
+        }
+
+        function checkNewPasswordStrength(pwd) {
+            const bar = document.getElementById('cp-strength-bar');
+            const text = document.getElementById('cp-strength-text');
+            if (!bar || !text) return;
+
+            if (!pwd) {
+                bar.style.width = '0%';
+                bar.className = 'h-1.5 w-0 bg-slate-300 transition-all duration-300';
+                text.innerText = 'Chưa nhập';
+                text.className = 'font-bold text-slate-400';
+                return;
+            }
+
+            let score = 0;
+            if (pwd.length >= 4) score++;
+            if (pwd.length >= 6) score++;
+            if (/[0-9]/.test(pwd) && /[a-zA-Z]/.test(pwd)) score++;
+            if (/[^a-zA-Z0-9]/.test(pwd) || pwd.length >= 10) score++;
+
+            if (score <= 1) {
+                bar.style.width = '25%';
+                bar.className = 'h-1.5 bg-red-500 transition-all duration-300';
+                text.innerText = 'Yếu';
+                text.className = 'font-bold text-red-500';
+            } else if (score === 2) {
+                bar.style.width = '50%';
+                bar.className = 'h-1.5 bg-amber-500 transition-all duration-300';
+                text.innerText = 'Trung bình';
+                text.className = 'font-bold text-amber-500';
+            } else if (score === 3) {
+                bar.style.width = '75%';
+                bar.className = 'h-1.5 bg-blue-500 transition-all duration-300';
+                text.innerText = 'Khá tốt';
+                text.className = 'font-bold text-blue-600';
+            } else {
+                bar.style.width = '100%';
+                bar.className = 'h-1.5 bg-emerald-500 transition-all duration-300';
+                text.innerText = 'Rất mạnh & An toàn';
+                text.className = 'font-bold text-emerald-600';
+            }
+        }
+
+        function handleChangePassword(e) {
+            e.preventDefault();
+            const acc = getCurrentAccount();
+            if (!acc) return;
+
+            const curPass = document.getElementById('cp-current-password').value.trim();
+            const newPass = document.getElementById('cp-new-password').value.trim();
+            const confPass = document.getElementById('cp-confirm-password').value.trim();
+            const errBox = document.getElementById('cp-error-box');
+            const errMsg = document.getElementById('cp-error-msg');
+
+            // Kiểm tra mật khẩu hiện tại
+            if (acc.password && acc.password !== curPass) {
+                if (errBox) errBox.classList.remove('hidden');
+                if (errMsg) errMsg.innerText = 'Mật khẩu hiện tại không chính xác!';
+                return;
+            }
+
+            if (newPass.length < 4) {
+                if (errBox) errBox.classList.remove('hidden');
+                if (errMsg) errMsg.innerText = 'Mật khẩu mới phải có tối thiểu 4 ký tự!';
+                return;
+            }
+
+            if (newPass !== confPass) {
+                if (errBox) errBox.classList.remove('hidden');
+                if (errMsg) errMsg.innerText = 'Xác nhận mật khẩu mới không khớp!';
+                return;
+            }
+
+            // Cập nhật mật khẩu
+            acc.password = newPass;
+            acc.passwordChangedAt = new Date().toISOString().split('T')[0];
+
+            saveAccountsToStorage();
+            closeChangePasswordModal();
+            renderPermissionsMatrix();
+            renderQuickLoginList();
+            showToast('Đổi mật khẩu thành công! Mật khẩu mới đã được kích hoạt.');
+        }
+
+        // ================= CHUYỂN ĐỔI TÀI KHOẢN (CÓ MẬT KHẨU) =================
+        function openSwitchAccountModal(targetId = null) {
+            const select = document.getElementById('switch-target-account');
+            const modal = document.getElementById('switch-account-modal');
+            const passInp = document.getElementById('switch-password');
+            const errBox = document.getElementById('switch-error-box');
+
+            if (!select || !modal) return;
+            if (errBox) errBox.classList.add('hidden');
+            if (passInp) passInp.value = '';
+
+            select.innerHTML = accounts.map(a => {
+                const isCur = a.id === currentAccountId;
+                const isLocked = a.status === 'locked';
+                return `<option value="${a.id}" ${targetId ? (a.id === targetId ? 'selected' : '') : (isCur ? 'selected' : '')}>
+                    ${a.name} (@${a.username}) - ${a.roleTitle} ${isLocked ? '[ĐÃ KHÓA]' : ''}
+                </option>`;
+            }).join('');
+
+            onSwitchAccountSelectChange(select.value);
+            modal.classList.remove('hidden');
+        }
+
+        function closeSwitchAccountModal() {
+            document.getElementById('switch-account-modal').classList.add('hidden');
+        }
+
+        function onSwitchAccountSelectChange(accId) {
+            const acc = accounts.find(a => a.id === accId);
+            const hint = document.getElementById('switch-quick-pass-hint');
+            if (!hint) return;
+            if (acc) {
+                hint.innerText = `Gợi ý MK: ${acc.password || '123456'}`;
+            } else {
+                hint.innerText = '';
+            }
+        }
+
+        function promptSwitchToAccount(accId) {
+            if (accId === currentAccountId) {
+                showToast('Bạn đang sử dụng tài khoản này!', 'info');
+                return;
+            }
+            openSwitchAccountModal(accId);
+        }
+
+        function handleSwitchAccount(e) {
+            e.preventDefault();
+            const select = document.getElementById('switch-target-account');
+            const targetId = select.value;
+            const enteredPass = document.getElementById('switch-password').value.trim();
+            const errBox = document.getElementById('switch-error-box');
+            const errMsg = document.getElementById('switch-error-msg');
+
+            const targetAcc = accounts.find(a => a.id === targetId);
+            if (!targetAcc) return;
+
+            if (targetAcc.status === 'locked') {
+                if (errBox) errBox.classList.remove('hidden');
+                if (errMsg) errMsg.innerText = `Tài khoản "${targetAcc.name}" đang bị khóa!`;
+                return;
+            }
+
+            // Kiểm tra mật khẩu tài khoản đích
+            if (targetAcc.password && targetAcc.password !== enteredPass) {
+                if (errBox) errBox.classList.remove('hidden');
+                if (errMsg) errMsg.innerText = 'Mật khẩu của tài khoản này không chính xác!';
+                return;
+            }
+
+            // Chuyển thành công
+            currentAccountId = targetAcc.id;
+            currentUserRole = (targetAcc.isSuperAdmin || (targetAcc.permissions && targetAcc.permissions.settings_manage)) ? 'admin' : 'staff';
+            targetAcc.lastLogin = new Date().toLocaleString('vi-VN');
+
+            saveAccountsToStorage(true);
+
+            try {
+                localStorage.setItem('vovinam_auth_session', JSON.stringify({
+                    accountId: targetAcc.id,
+                    username: targetAcc.username,
+                    loginTime: new Date().toISOString()
+                }));
+            } catch (err) {}
+
+            closeSwitchAccountModal();
+            populateAccountSwitcher();
+            updateRoleUI();
+            renderStudents();
+            renderClasses();
+            renderPendingApprovals();
+            renderTuitionTable();
+            renderPermissionsMatrix();
+
+            showToast(`Đã chuyển sang tài khoản: ${targetAcc.name} (${targetAcc.roleTitle})`);
+        }
+
+        // ================= ADMIN ĐẶT LẠI MẬT KHẨU CHO NHÂN SỰ =================
+        function openAdminResetPasswordModal(accId) {
+            if (!hasPermission('settings_manage')) {
+                showToast('Tài khoản của bạn không có quyền đặt lại mật khẩu người khác!', 'error');
+                return;
+            }
+
+            const acc = accounts.find(a => a.id === accId);
+            if (!acc) return;
+
+            document.getElementById('admin-reset-acc-id').value = acc.id;
+            document.getElementById('admin-reset-target-name').innerText = acc.name;
+            document.getElementById('admin-reset-target-username').innerText = `Tên đăng nhập: @${acc.username} (${acc.roleTitle})`;
+            document.getElementById('admin-reset-new-password').value = '';
+
+            document.getElementById('admin-reset-password-modal').classList.remove('hidden');
+        }
+
+        function closeAdminResetPasswordModal() {
+            document.getElementById('admin-reset-password-modal').classList.add('hidden');
+        }
+
+        function handleAdminResetPassword(e) {
+            e.preventDefault();
+            if (!hasPermission('settings_manage')) {
+                showToast('Không có quyền quản trị để thực hiện!', 'error');
+                return;
+            }
+
+            const accId = document.getElementById('admin-reset-acc-id').value;
+            const newPass = document.getElementById('admin-reset-new-password').value.trim();
+
+            if (!newPass || newPass.length < 4) {
+                showToast('Vui lòng nhập mật khẩu mới từ 4 ký tự trở lên!', 'error');
+                return;
+            }
+
+            const acc = accounts.find(a => a.id === accId);
+            if (!acc) return;
+
+            acc.password = newPass;
+            acc.passwordChangedAt = new Date().toISOString().split('T')[0];
+
+            saveAccountsToStorage();
+            closeAdminResetPasswordModal();
+            renderPermissionsMatrix();
+            renderQuickLoginList();
+            showToast(`Admin đã đặt lại mật khẩu mới cho ${acc.name} thành công!`);
+        }
+
+        function toggleAccountLock(accId) {
+            if (!hasPermission('settings_manage')) {
+                showToast('Không có quyền quản trị để khóa/mở khóa tài khoản!', 'error');
+                return;
+            }
+
+            const acc = accounts.find(a => a.id === accId);
+            if (!acc || acc.isSuperAdmin) {
+                showToast('Không thể khóa tài khoản Quản Trị Viên tối cao!', 'error');
+                return;
+            }
+
+            const isLocked = acc.status === 'locked';
+            const actionText = isLocked ? 'MỞ KHÓA' : 'TẠM KHÓA';
+
+            showConfirm(`Xác Nhận ${actionText} Tài Khoản`, `Bạn có chắc muốn ${actionText.toLowerCase()} tài khoản "${acc.name}" (@${acc.username})?`, () => {
+                acc.status = isLocked ? 'active' : 'locked';
+                saveAccountsToStorage();
+                renderPermissionsMatrix();
+                renderQuickLoginList();
+
+                // Nếu khóa đúng tài khoản đang đăng nhập -> Đăng xuất
+                if (currentAccountId === accId && acc.status === 'locked') {
+                    handleLogout();
+                } else {
+                    showToast(`Đã ${actionText.toLowerCase()} tài khoản ${acc.name}!`);
+                }
+            });
+        }
+
+        function togglePasswordVisibility(inputId, iconId) {
+            const input = document.getElementById(inputId);
+            const icon = document.getElementById(iconId);
+            if (!input || !icon) return;
+
+            if (input.type === 'password') {
+                input.type = 'text';
+                icon.className = 'fa-solid fa-eye-slash text-xs text-vovinam-blue';
+            } else {
+                input.type = 'password';
+                icon.className = 'fa-solid fa-eye text-xs text-slate-400';
+            }
+        }
+
+        function generateRandomPassword(targetInputId) {
+            const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789@#$';
+            let pwd = 'Vvn';
+            for (let i = 0; i < 5; i++) {
+                pwd += chars.charAt(Math.floor(Math.random() * chars.length));
+            }
+            const input = document.getElementById(targetInputId);
+            if (input) {
+                input.value = pwd;
+                if (input.type === 'password') {
+                    input.type = 'text';
+                }
+                showToast(`Đã tạo mật khẩu ngẫu nhiên: ${pwd}`, 'info');
+            }
+        }
+
     </script>
 </body>
 </html>
